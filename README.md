@@ -100,11 +100,11 @@ CI 发布签名 APK 时，在仓库 Secrets 里配置 `KEYSTORE_BASE64`、`KEYST
 ## 自托管（同源反代）
 
 ```bash
-docker compose -f docker-compose.standalone.yml up
+docker compose -f docker-compose.standalone.yml up -d --build
 ```
 
 `docker/Caddyfile.standalone` 托管静态文件并把 `/api`、`/ws` 反代到 `$DSH_SERVER`
-（默认 dsh.r2049.cn），绕过浏览器跨源限制；Tauri 桌面构建不受 CORS 影响。
+（默认 `dsh.r2049.cn:443`），绕过浏览器跨源限制；Tauri 桌面 / Android 构建不受 CORS 影响。
 
 ## 架构
 

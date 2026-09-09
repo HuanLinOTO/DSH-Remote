@@ -109,11 +109,12 @@ skips the Android artifacts.
 ## Self-hosting (same-origin reverse proxy)
 
 ```bash
-docker compose -f docker-compose.standalone.yml up
+docker compose -f docker-compose.standalone.yml up -d --build
 ```
 
 `docker/Caddyfile.standalone` serves the static build and proxies `/api` and `/ws` to `$DSH_SERVER`
-(defaults to dsh.r2049.cn), avoiding browser cross-origin restrictions. Tauri desktop builds are unaffected by CORS.
+(defaults to `dsh.r2049.cn:443`), avoiding browser cross-origin restrictions. Tauri desktop and Android
+builds are unaffected by CORS.
 
 ## Architecture
 
