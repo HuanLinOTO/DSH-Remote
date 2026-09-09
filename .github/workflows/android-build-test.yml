@@ -1,0 +1,139 @@
+name: Android build test
+
+# Temporary workflow: validates the android job of release.yml (Gradle
+# distribution provisioning, signing, APK assembly) without rebuilding desktop.
+on:
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - run: sdkmanager "ndk;29.0.14206865"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: android-aarch64
+
+      - name: Gradle cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            src-tauri/gen/android/.gradle
+          key: gradle-aarch64-${{ hashFiles('src-tauri/gen/android/**/*.gradle*', 'src-tauri/gen/android/**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - run: npm ci
+
+      - name: Setup Android signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          KS_PW=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '\r\n')
+          KS_ALIAS=$(printf '%s' "$KEY_ALIAS" | tr -d '\r\n')
+          KS_KEY_PW=$(printf '%s' "$KEY_PASSWORD" | tr -d '\r\n')
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          cat > src-tauri/gen/android/keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/keystore.jks
+          storePassword=$KS_PW
+          keyAlias=$KS_ALIAS
+          keyPassword=$KS_KEY_PW
+          EOF
+
+      - name: Provision Gradle distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="8.14.3"
+          SHA256="bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531"
+          DIST_NAME="gradle-${VERSION}-bin"
+          ZIP_DIR="$HOME/.gradle-dist"
+          ZIP="$ZIP_DIR/${DIST_NAME}.zip"
+          PROPS="src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties"
+          DIST_DIR="$HOME/.gradle/wrapper/dists/${DIST_NAME}"
+
+          chmod +x src-tauri/gen/android/gradlew
+
+          if find "$DIST_DIR" -maxdepth 2 -name '*.ok' -print -quit 2>/dev/null | grep -q .; then
+            echo "Gradle ${VERSION} already extracted from the wrapper cache"
+          else
+            mkdir -p "$ZIP_DIR"
+            if [ ! -f "$ZIP" ] || ! echo "${SHA256}  ${ZIP}" | sha256sum -c - >/dev/null 2>&1; then
+              for URL in \
+                "https://services.gradle.org/distributions/${DIST_NAME}.zip" \
+                "https://downloads.gradle.org/distributions/${DIST_NAME}.zip" \
+                "https://mirrors.cloud.tencent.com/gradle/${DIST_NAME}.zip" \
+                "https://mirror.nju.edu.cn/gradle/${DIST_NAME}.zip"; do
+                echo "::group::curl $URL"
+                rm -f "${ZIP}.part"
+                if curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 \
+                     --connect-timeout 20 --max-time 900 -o "${ZIP}.part" "$URL"; then
+                  mv "${ZIP}.part" "$ZIP"
+                  echo "::endgroup::"
+                  break
+                fi
+                echo "::endgroup::"
+              done
+            fi
+            echo "${SHA256}  ${ZIP}" | sha256sum -c -
+          fi
+
+          sed -i "s#^distributionUrl=.*#distributionUrl=file://${ZIP}#" "$PROPS"
+          grep -q '^distributionSha256Sum=' "$PROPS" \
+            || echo "distributionSha256Sum=${SHA256}" >> "$PROPS"
+          cat "$PROPS"
+
+          echo "GRADLE_OPTS=-Djava.net.preferIPv4Stack=true" >> "$GITHUB_ENV"
+
+      - name: Build and verify APK
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+        run: |
+          VERSION="${{ github.ref_name }}"
+          npx tauri android build --apk --target aarch64
+
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -path '*/release/*.apk' -type f | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::no release APK produced"
+            exit 1
+          fi
+
+          mkdir -p release-artifacts
+          DEST="DSH-Remote-${VERSION}-android-arm64.apk"
+          cp "$APK" "release-artifacts/$DEST"
+
+          BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools/" | tail -1)"
+          "$BT/apksigner" verify --print-certs "release-artifacts/$DEST"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-android-arm64
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 1
