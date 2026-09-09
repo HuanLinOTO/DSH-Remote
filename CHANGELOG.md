@@ -23,6 +23,7 @@
 - fix(chat): 会话首屏若不含 user 锚点，自动向上补页，避免只剩一个没有提问的过程壳
 - docs: README 声明上游来源（OpenCodeUI / ds-harness-remote）与第三方客户端定位
 - ci: 补充 Rust 侧测试与缓存；发布产物、Docker 镜像改名 DSH Remote；Android 签名密钥缺失时跳过 APK 产物
+- ci(android): 修掉误提交的本机 Gradle 代理配置（`systemProp.*` 让 runner 上所有 Gradle 网络请求被拒），发行版改为 curl 多镜像预取 + sha256 校验，并校验 `gradlew` 可执行位
 
 ## [v0.6.45] - 2026-08-29
 
