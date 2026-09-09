@@ -1,0 +1,784 @@
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Sidebar } from './features/chat'
+import { ChatPane } from './features/chat/ChatPane'
+import { SplitContainer } from './features/chat/SplitContainer'
+import { ToastContainer } from './components/ToastContainer'
+import { RightPanel } from './components/RightPanel'
+import { DesktopTitlebar } from './components/DesktopTitlebar'
+import { useDirectory, useGlobalEvents, useGlobalKeybindings, useRouter } from './hooks'
+import { useViewportHeight } from './hooks/useViewportHeight'
+import { useWakeLock } from './hooks/useWakeLock'
+import type { KeybindingHandlers } from './hooks/useKeybindings'
+import {
+  layoutStore,
+  paneLayoutStore,
+  useLayoutStore,
+  usePaneController,
+  usePaneControllers,
+  usePaneLayout,
+} from './store'
+import {
+  ChatViewportProvider,
+  CHAT_SURFACE_MIN_WIDTH,
+  canUseSplitPane,
+  useChatViewportController,
+} from './features/chat/chatViewport'
+import { isSameDirectory, collectActiveDirectories } from './utils'
+import { makeSessionKey, sessionKeyToServerId, splitSessionKey } from './utils/sessionKey'
+import { multiServerStore } from './store/multiServerStore'
+import { serverStore } from './store/serverStore'
+import { initNotificationSound } from './utils/notificationSoundBridge'
+import type { SettingsTab } from './features/settings/SettingsDialog'
+import { InternalDragLayer } from './components/InternalDragLayer'
+
+const SettingsDialog = lazy(() =>
+  import('./features/settings/SettingsDialog').then(module => ({ default: module.SettingsDialog })),
+)
+
+const MOBILE_PAGER_SCROLL_END_MS = 120
+const MOBILE_RIGHT_PANEL_UNMOUNT_MS = 420
+
+type MobilePagerPage = 'left' | 'chat' | 'right'
+
+function App() {
+  const { t } = useTranslation(['commands', 'chat', 'common', 'components'])
+  const router = useRouter()
+  const {
+    sessionId: routeSessionId,
+    serverId: routeServerId,
+    directory: routeDirectory,
+    navigateToSession: navigateRouteToSession,
+    navigateHome: navigateRouteHome,
+    replaceSession,
+  } = router
+  // 路由里 sessionId 直接是「服务器作用域复合 key」（serverId::sessionId）；
+  // 旧书签（无 :: 前缀）视为活动服务器，合成复合 key
+  const routeSessionKey = useMemo(() => {
+    if (!routeSessionId) return null
+    if (routeSessionId.includes('::')) return routeSessionId
+    return makeSessionKey(serverStore.getActiveServerId(), routeSessionId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeSessionId])
+  const { currentDirectory, savedDirectories, sidebarExpanded, setSidebarExpanded } = useDirectory()
+  const { rightPanelOpen, rightPanelWidth, wakeLock } = useLayoutStore()
+  const { surfaceRef, value: chatViewport } = useChatViewportController({
+    sidebarExpanded,
+    rightPanelOpen,
+    requestedRightPanelWidth: rightPanelWidth,
+  })
+  const splitPaneEnabled = canUseSplitPane(chatViewport)
+  const paneLayout = usePaneLayout()
+  const focusedController = usePaneController(paneLayout.focusedPaneId)
+  const paneControllers = usePaneControllers()
+  const syncingFromRouteRef = useRef(false)
+  const lastRouteSessionIdRef = useRef<string | null | undefined>(undefined)
+  // 当 currentDirectory 为 undefined 时表示全局模式，
+  // 不应 fallback 到 session 自身的 directory，否则 replaceSession 会把 dir 参数写回 URL
+  const focusedRouteDirectory =
+    currentDirectory !== undefined
+      ? paneLayout.focusedSessionId === routeSessionId
+        ? routeDirectory || focusedController?.effectiveDirectory || currentDirectory
+        : focusedController?.effectiveDirectory || currentDirectory
+      : undefined
+
+  useEffect(() => {
+    const cleanup = initNotificationSound()
+    return cleanup
+  }, [])
+
+  useViewportHeight()
+  useWakeLock(wakeLock)
+
+  const activeDirectories = useMemo(
+    () =>
+      collectActiveDirectories({
+        routeDirectory,
+        currentDirectory,
+        paneDirectories: paneControllers
+          .map(controller => controller.effectiveDirectory)
+          .filter((directory): directory is string => Boolean(directory)),
+        projectDirectories: (Array.isArray(savedDirectories) ? savedDirectories : []).map(directory => directory.path),
+      }),
+    [routeDirectory, currentDirectory, paneControllers, savedDirectories],
+  )
+
+  // 全局唯一 SSE 连接。所有 pane 通过 consumer 机制接收自己的 session 事件。
+  useGlobalEvents(activeDirectories)
+
+  // URL -> focused pane session
+  useEffect(() => {
+    if (lastRouteSessionIdRef.current === routeSessionKey) return
+    lastRouteSessionIdRef.current = routeSessionKey
+    if (paneLayoutStore.getFocusedSessionId() === routeSessionKey) return
+    syncingFromRouteRef.current = true
+    paneLayoutStore.setFocusedSession(routeSessionKey)
+  }, [routeSessionKey])
+
+  // home（无 session）且 URL 指定了服务器：同步 active server（恢复链接/新建会话的服务器上下文）
+  useEffect(() => {
+    if (routeSessionKey || !routeServerId) return
+    if (serverStore.getActiveServerId() === routeServerId) return
+    serverStore.setActiveServer(routeServerId)
+  }, [routeSessionKey, routeServerId])
+
+  // 多服务器模式：项目选择器焦点跟随当前聚焦 pane 的 session（切换 pane / 分屏聚焦时同步）
+  useEffect(() => {
+    if (!multiServerStore.isEnabled()) return
+    const focusedSessionKey = paneLayout.focusedSessionId
+    if (!focusedSessionKey) return
+    // 只同步焦点服务器；目录由 URL 派生（pane -> URL 同步会写入对应 dir，不再手动 setCurrentDirectory
+    // 以免清掉 session 路由）
+    multiServerStore.setFocusedServerId(splitSessionKey(focusedSessionKey).serverId)
+  }, [paneLayout.focusedSessionId])
+
+  // focused pane session -> URL（路由只反映当前 focused pane）
+  useEffect(() => {
+    if (syncingFromRouteRef.current) {
+      syncingFromRouteRef.current = false
+      return
+    }
+    if (paneLayoutStore.getFocusedSessionId() !== paneLayout.focusedSessionId) return
+    const focusedSessionKey = paneLayout.focusedSessionId
+    if (focusedSessionKey === routeSessionKey && isSameDirectory(routeDirectory, focusedRouteDirectory)) return
+    // 复合 key 直接写入 URL（本身携带服务器身份）
+    replaceSession(focusedSessionKey, focusedRouteDirectory)
+  }, [
+    paneLayout.focusedPaneId,
+    paneLayout.focusedSessionId,
+    routeSessionKey,
+    routeDirectory,
+    replaceSession,
+    focusedRouteDirectory,
+  ])
+
+  const navigatePaneToSession = useCallback(
+    (paneId: string, sessionKey: string, directory?: string) => {
+      paneLayoutStore.focusPane(paneId)
+      paneLayoutStore.setPaneSession(paneId, sessionKey)
+      // 项目选择器焦点跟随打开的 session：服务器 + 工作区目录
+      // （注意：不用 setCurrentDirectory——它会把 URL 清成 #/?dir= 导致 session 路由丢失；
+      //  目录通过 navigateRouteToSession 写入 URL，currentDirectory 由 URL 派生自动跟随）
+      const { serverId } = splitSessionKey(sessionKey)
+      multiServerStore.setFocusedServerId(serverId)
+      navigateRouteToSession(sessionKey, directory)
+    },
+    [navigateRouteToSession],
+  )
+
+  const navigatePaneHome = useCallback(
+    (paneId: string) => {
+      paneLayoutStore.focusPane(paneId)
+      paneLayoutStore.setPaneSession(paneId, null)
+      // 多服务器模式：进入 home（新建对话）时切到焦点服务器。
+      // 切到不同服务器：server-switch 会清掉 currentDirectory/目录参数（新服务器不一定有旧目录）；
+      // 同一服务器内新建：保留当前工作区目录
+      if (multiServerStore.isEnabled()) {
+        const focusedServerId = multiServerStore.getFocusedServerId()
+        if (serverStore.getActiveServerId() !== focusedServerId) {
+          serverStore.setActiveServer(focusedServerId)
+        }
+        navigateRouteHome(focusedServerId)
+      } else {
+        navigateRouteHome()
+      }
+    },
+    [navigateRouteHome],
+  )
+
+  const handleSelectSession = useCallback(
+    (session: { id: string; serverId?: string; directory?: string }) => {
+      const paneId = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
+      if (!paneId) return
+      const sessionKey = makeSessionKey(session.serverId ?? serverStore.getActiveServerId(), session.id)
+      navigatePaneToSession(paneId, sessionKey, session.directory)
+    },
+    [paneLayout.focusedPaneId, navigatePaneToSession],
+  )
+
+  const handleNewSession = useCallback(() => {
+    const paneId = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
+    if (!paneId) return
+    navigatePaneHome(paneId)
+  }, [paneLayout.focusedPaneId, navigatePaneHome])
+
+  const handleEnterSplitMode = useCallback(() => {
+    paneLayoutStore.enterSplitMode(paneLayout.focusedSessionId)
+  }, [paneLayout.focusedSessionId])
+
+  const handleToggleFocusedPaneFullscreen = useCallback(() => {
+    const paneId = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
+    if (!paneId) return
+    paneLayoutStore.togglePaneFullscreen(paneId)
+  }, [paneLayout.focusedPaneId])
+
+  const isMobilePanelLayout = chatViewport.interaction.sidebarBehavior === 'overlay'
+  const mobileLeftPanelWidth = chatViewport.layout.sidebar.overlayWidth
+  const mobilePageWidth = Math.max(1, chatViewport.layout.viewportWidth)
+  const mobileChatScrollLeft = mobileLeftPanelWidth
+  const mobileRightScrollLeft = mobileLeftPanelWidth + mobilePageWidth
+  const mobilePagerRef = useRef<HTMLDivElement | null>(null)
+  const mobilePagerInitializedRef = useRef(false)
+  const mobilePagerInteractingRef = useRef(false)
+  const mobileProgrammaticTargetRef = useRef<MobilePagerPage | null>(null)
+  const mobileScrollEndTimerRef = useRef<number | null>(null)
+  const mobileRightUnmountTimerRef = useRef<number | null>(null)
+  const shouldRenderMobileRightPanelRef = useRef(false)
+  const [shouldRenderMobileRightPanel, setShouldRenderMobileRightPanel] = useState(false)
+
+  const setMobileRightPanelRendered = useCallback((rendered: boolean) => {
+    if (shouldRenderMobileRightPanelRef.current === rendered) return
+    shouldRenderMobileRightPanelRef.current = rendered
+    setShouldRenderMobileRightPanel(rendered)
+  }, [])
+
+  const clearMobileRightUnmountTimer = useCallback(() => {
+    if (mobileRightUnmountTimerRef.current === null) return
+    window.clearTimeout(mobileRightUnmountTimerRef.current)
+    mobileRightUnmountTimerRef.current = null
+  }, [])
+
+  const ensureMobileRightPanelRendered = useCallback(() => {
+    clearMobileRightUnmountTimer()
+    setMobileRightPanelRendered(true)
+  }, [clearMobileRightUnmountTimer, setMobileRightPanelRendered])
+
+  const mobileActivePage: MobilePagerPage = rightPanelOpen ? 'right' : sidebarExpanded ? 'left' : 'chat'
+
+  const getMobilePageScrollLeft = useCallback(
+    (page: MobilePagerPage) => (page === 'left' ? 0 : page === 'right' ? mobileRightScrollLeft : mobileChatScrollLeft),
+    [mobileChatScrollLeft, mobileRightScrollLeft],
+  )
+
+  const scrollMobilePagerTo = useCallback(
+    (page: MobilePagerPage, behavior: ScrollBehavior = 'smooth') => {
+      const pager = mobilePagerRef.current
+      if (!pager) return
+
+      const left = getMobilePageScrollLeft(page)
+      if (Math.abs(pager.scrollLeft - left) < 1) {
+        mobileProgrammaticTargetRef.current = null
+        pager.scrollTo({ left, behavior: 'auto' })
+        return
+      }
+
+      mobileProgrammaticTargetRef.current = behavior === 'smooth' ? page : null
+      pager.scrollTo({ left, behavior })
+    },
+    [getMobilePageScrollLeft],
+  )
+
+  const getNearestMobilePage = useCallback(
+    (scrollLeft: number): MobilePagerPage => {
+      const leftDistance = Math.abs(scrollLeft)
+      const chatDistance = Math.abs(scrollLeft - mobileChatScrollLeft)
+      const rightDistance = Math.abs(scrollLeft - mobileRightScrollLeft)
+
+      if (leftDistance <= chatDistance && leftDistance <= rightDistance) return 'left'
+      if (rightDistance <= chatDistance) return 'right'
+      return 'chat'
+    },
+    [mobileChatScrollLeft, mobileRightScrollLeft],
+  )
+
+  const syncMobilePagerState = useCallback(() => {
+    const pager = mobilePagerRef.current
+    if (!pager) return
+
+    const page = getNearestMobilePage(pager.scrollLeft)
+    if (page === 'left') {
+      if (!sidebarExpanded) setSidebarExpanded(true)
+      if (rightPanelOpen) layoutStore.closeRightPanel()
+      return
+    }
+
+    if (page === 'right') {
+      ensureMobileRightPanelRendered()
+      if (sidebarExpanded) setSidebarExpanded(false)
+      if (!rightPanelOpen) layoutStore.openRightPanel()
+      return
+    }
+
+    if (sidebarExpanded) setSidebarExpanded(false)
+    if (rightPanelOpen) layoutStore.closeRightPanel()
+  }, [ensureMobileRightPanelRendered, getNearestMobilePage, rightPanelOpen, setSidebarExpanded, sidebarExpanded])
+
+  const handleMobilePagerScroll = useCallback(() => {
+    const pager = mobilePagerRef.current
+    if (!pager) return
+
+    const scrollLeft = pager.scrollLeft
+
+    // -1 (滑向左栏) 到 0 (对话页) 到 1 (滑向右栏)
+    const rawProgress = (scrollLeft - mobileChatScrollLeft) / (scrollLeft < mobileChatScrollLeft ? mobileLeftPanelWidth : mobilePageWidth)
+    const progress = Math.max(-1, Math.min(1, rawProgress))
+    const absProgress = Math.abs(progress)
+    const rightProgress = Math.max(0, progress)
+    const easedRightProgress = rightProgress * rightProgress
+    const originX = 50 - progress * 50
+
+    pager.style.setProperty('--mobile-chat-rotate-y', `${progress * 10}deg`)
+    pager.style.setProperty('--mobile-chat-scale', `${1 - absProgress * 0.06}`)
+    pager.style.setProperty('--mobile-chat-offset-x', `${easedRightProgress * -48}px`)
+    pager.style.setProperty('--mobile-chat-transform-origin', `${originX}% 50%`)
+
+    if (scrollLeft > mobileChatScrollLeft + 24) {
+      ensureMobileRightPanelRendered()
+    }
+
+    if (mobileScrollEndTimerRef.current !== null) {
+      window.clearTimeout(mobileScrollEndTimerRef.current)
+    }
+
+    mobileScrollEndTimerRef.current = window.setTimeout(() => {
+      mobileScrollEndTimerRef.current = null
+      if (mobilePagerInteractingRef.current) return
+
+      if (mobileProgrammaticTargetRef.current) {
+        const targetLeft = getMobilePageScrollLeft(mobileProgrammaticTargetRef.current)
+        if (Math.abs(pager.scrollLeft - targetLeft) >= 2) return
+        mobileProgrammaticTargetRef.current = null
+      }
+
+      syncMobilePagerState()
+    }, MOBILE_PAGER_SCROLL_END_MS)
+  }, [
+    ensureMobileRightPanelRendered,
+    getMobilePageScrollLeft,
+    mobileChatScrollLeft,
+    mobileLeftPanelWidth,
+    mobilePageWidth,
+    syncMobilePagerState,
+  ])
+
+  const handleMobilePagerInteractionStart = useCallback(() => {
+    mobilePagerInteractingRef.current = true
+    mobileProgrammaticTargetRef.current = null
+  }, [])
+
+  const handleMobilePagerInteractionEnd = useCallback(() => {
+    mobilePagerInteractingRef.current = false
+
+    if (mobileScrollEndTimerRef.current !== null) {
+      window.clearTimeout(mobileScrollEndTimerRef.current)
+    }
+
+    mobileScrollEndTimerRef.current = window.setTimeout(() => {
+      mobileScrollEndTimerRef.current = null
+      syncMobilePagerState()
+    }, MOBILE_PAGER_SCROLL_END_MS)
+  }, [syncMobilePagerState])
+
+  useLayoutEffect(() => {
+    if (!isMobilePanelLayout) {
+      mobilePagerInitializedRef.current = false
+      return
+    }
+
+    const page = rightPanelOpen ? 'right' : sidebarExpanded ? 'left' : 'chat'
+    if (!mobilePagerInitializedRef.current) {
+      const pager = mobilePagerRef.current
+      if (pager) {
+        pager.scrollLeft = getMobilePageScrollLeft(page)
+      }
+      mobileProgrammaticTargetRef.current = null
+      mobilePagerInitializedRef.current = true
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      scrollMobilePagerTo(page, 'smooth')
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [getMobilePageScrollLeft, isMobilePanelLayout, rightPanelOpen, scrollMobilePagerTo, sidebarExpanded])
+
+  useEffect(() => {
+    if (!isMobilePanelLayout) {
+      clearMobileRightUnmountTimer()
+      const frameId = window.requestAnimationFrame(() => setMobileRightPanelRendered(false))
+      return () => window.cancelAnimationFrame(frameId)
+    }
+
+    if (rightPanelOpen) {
+      clearMobileRightUnmountTimer()
+      const frameId = window.requestAnimationFrame(() => setMobileRightPanelRendered(true))
+      return () => window.cancelAnimationFrame(frameId)
+    }
+
+    clearMobileRightUnmountTimer()
+    mobileRightUnmountTimerRef.current = window.setTimeout(() => {
+      setMobileRightPanelRendered(false)
+      mobileRightUnmountTimerRef.current = null
+    }, MOBILE_RIGHT_PANEL_UNMOUNT_MS)
+
+    return clearMobileRightUnmountTimer
+  }, [clearMobileRightUnmountTimer, isMobilePanelLayout, rightPanelOpen, setMobileRightPanelRendered])
+
+  useEffect(() => {
+    if (!isMobilePanelLayout || !rightPanelOpen || !sidebarExpanded) return
+
+    const frameId = window.requestAnimationFrame(() => setSidebarExpanded(false))
+    return () => window.cancelAnimationFrame(frameId)
+  }, [isMobilePanelLayout, rightPanelOpen, setSidebarExpanded, sidebarExpanded])
+
+  useEffect(() => {
+    return () => {
+      if (mobileScrollEndTimerRef.current !== null) window.clearTimeout(mobileScrollEndTimerRef.current)
+      if (mobileRightUnmountTimerRef.current !== null) window.clearTimeout(mobileRightUnmountTimerRef.current)
+      mobileProgrammaticTargetRef.current = null
+    }
+  }, [])
+
+  const handleOpenSidebar = useCallback(() => {
+    if (isMobilePanelLayout && rightPanelOpen) {
+      layoutStore.closeRightPanel()
+    }
+    if (isMobilePanelLayout) {
+      scrollMobilePagerTo('left')
+    }
+    setSidebarExpanded(true)
+  }, [isMobilePanelLayout, rightPanelOpen, scrollMobilePagerTo, setSidebarExpanded])
+
+  const handleCloseSidebar = useCallback(() => {
+    if (isMobilePanelLayout) {
+      scrollMobilePagerTo('chat')
+    }
+    setSidebarExpanded(false)
+  }, [isMobilePanelLayout, scrollMobilePagerTo, setSidebarExpanded])
+
+  const handleToggleSidebar = useCallback(() => {
+    if (sidebarExpanded) {
+      handleCloseSidebar()
+    } else {
+      handleOpenSidebar()
+    }
+  }, [handleCloseSidebar, handleOpenSidebar, sidebarExpanded])
+
+  const handleToggleRightPanel = useCallback(() => {
+    if (!isMobilePanelLayout) {
+      layoutStore.toggleRightPanel()
+      return
+    }
+
+    if (rightPanelOpen) {
+      scrollMobilePagerTo('chat')
+      layoutStore.closeRightPanel()
+      return
+    }
+
+    ensureMobileRightPanelRendered()
+    if (sidebarExpanded) setSidebarExpanded(false)
+    scrollMobilePagerTo('right')
+    layoutStore.openRightPanel()
+  }, [ensureMobileRightPanelRendered, isMobilePanelLayout, rightPanelOpen, scrollMobilePagerTo, setSidebarExpanded, sidebarExpanded])
+
+  const focusedDirectory = focusedRouteDirectory || ''
+
+  // 右侧面板（文件/diff/终端）绑定焦点 session 的服务器：
+  // 切换焦点 session 到另一服务器时，右侧面板内容跟随该服务器而不是活动服务器
+  const focusedServerId = useMemo(() => {
+    if (!paneLayout.focusedSessionId) return undefined
+    return sessionKeyToServerId(paneLayout.focusedSessionId)
+  }, [paneLayout.focusedSessionId])
+
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('chat')
+  const openSettingsTab = useCallback((tab: SettingsTab) => {
+    setSettingsInitialTab(tab)
+    setSettingsDialogOpen(true)
+  }, [])
+  const openSettings = useCallback(() => {
+    openSettingsTab('chat')
+  }, [openSettingsTab])
+  const closeSettings = useCallback(() => setSettingsDialogOpen(false), [])
+
+  const renderPaneLeaf = useCallback(
+    (paneId: string, paneSessionId: string | null) => (
+      <ChatPane
+        key={paneId}
+        paneId={paneId}
+        sessionId={paneSessionId}
+        isFocused={paneLayout.focusedPaneId === paneId}
+        paneCount={paneLayout.paneCount}
+        displayMode={paneLayout.isSplit && paneLayout.fullscreenPaneId !== paneId ? 'split' : 'single'}
+        isPaneFullscreen={paneLayout.fullscreenPaneId === paneId}
+        onOpenSidebar={handleOpenSidebar}
+        onToggleRightPanel={handleToggleRightPanel}
+        showSidebarButton={chatViewport.interaction.sidebarBehavior === 'overlay'}
+        onSplitPane={splitPaneEnabled && !paneLayout.fullscreenPaneId ? handleEnterSplitMode : undefined}
+        onTogglePaneFullscreen={paneLayout.isSplit ? handleToggleFocusedPaneFullscreen : undefined}
+        onOpenSettings={openSettings}
+        navigatePaneToSession={navigatePaneToSession}
+        navigatePaneHome={navigatePaneHome}
+      />
+    ),
+    [
+      paneLayout.focusedPaneId,
+      paneLayout.paneCount,
+      paneLayout.isSplit,
+      paneLayout.fullscreenPaneId,
+      chatViewport.interaction.sidebarBehavior,
+      splitPaneEnabled,
+      handleOpenSidebar,
+      handleToggleRightPanel,
+      handleEnterSplitMode,
+      handleToggleFocusedPaneFullscreen,
+      openSettings,
+      navigatePaneToSession,
+      navigatePaneHome,
+    ],
+  )
+
+
+  // dsh：项目概念 = Host 工作区；标题栏“打开项目”回退到设置
+  const openProject = useCallback(() => openSettings(), [openSettings])
+
+  // 桌面标题栏通过 CustomEvent 触发打开项目/设置
+  useEffect(() => {
+    const onOpenProject = () => openProject()
+    const onOpenSettings = () => openSettings()
+    window.addEventListener('titlebar:open-project', onOpenProject)
+    window.addEventListener('titlebar:open-settings', onOpenSettings)
+    return () => {
+      window.removeEventListener('titlebar:open-project', onOpenProject)
+      window.removeEventListener('titlebar:open-settings', onOpenSettings)
+    }
+  }, [openProject, openSettings])
+
+  const keybindingHandlers = useMemo<KeybindingHandlers>(
+    () => ({
+      openSettings,
+      openProject,
+      toggleSidebar: handleToggleSidebar,
+      toggleRightPanel: handleToggleRightPanel,
+      focusInput: () => {
+        const input = document.querySelector<HTMLTextAreaElement>('[data-input-box] textarea')
+        input?.focus()
+      },
+      newSession: () => focusedController?.newSession(),
+      archiveSession: () => focusedController?.archiveSession(),
+      previousSession: () => focusedController?.previousSession(),
+      nextSession: () => focusedController?.nextSession(),
+      selectModel: () => focusedController?.openModelSelector(),
+      toggleAgent: () => focusedController?.toggleAgent(),
+      cancelMessage: () => focusedController?.cancelMessage(),
+      copyLastResponse: () => focusedController?.copyLastResponse(),
+      toggleFullAuto: () => focusedController?.toggleFullAuto(),
+      // Pane
+      focusNextPane: () => {
+        paneLayoutStore.focusNextPane()
+        requestAnimationFrame(() => {
+          const pid = paneLayoutStore.getFocusedPaneId()
+          if (pid) {
+            const input = document.querySelector<HTMLTextAreaElement>(`[data-pane-id="${pid}"] textarea`)
+            input?.focus()
+          }
+        })
+      },
+      focusPrevPane: () => {
+        paneLayoutStore.focusPrevPane()
+        requestAnimationFrame(() => {
+          const pid = paneLayoutStore.getFocusedPaneId()
+          if (pid) {
+            const input = document.querySelector<HTMLTextAreaElement>(`[data-pane-id="${pid}"] textarea`)
+            input?.focus()
+          }
+        })
+      },
+      splitRight: () => {
+        const pid = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
+        if (pid && splitPaneEnabled) paneLayoutStore.splitPane(pid, 'horizontal')
+      },
+      splitDown: () => {
+        const pid = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
+        if (pid && splitPaneEnabled) paneLayoutStore.splitPane(pid, 'vertical')
+      },
+      closePane: () => {
+        const pid = paneLayout.focusedPaneId ?? paneLayoutStore.getFocusedPaneId()
+        if (pid && paneLayout.isSplit) paneLayoutStore.closePane(pid)
+      },
+      togglePaneFullscreen: () => {
+        if (paneLayout.isSplit) handleToggleFocusedPaneFullscreen()
+      },
+    }),
+    [
+      openSettings,
+      openProject,
+      focusedController,
+      handleToggleSidebar,
+      handleToggleRightPanel,
+      paneLayout.focusedPaneId,
+      paneLayout.isSplit,
+      splitPaneEnabled,
+      handleToggleFocusedPaneFullscreen,
+    ],
+  )
+
+  useGlobalKeybindings(keybindingHandlers)
+
+
+  return (
+    <div className="relative flex h-full flex-col bg-bg-100 overflow-hidden">
+      <DesktopTitlebar />
+      <InternalDragLayer />
+      <ChatViewportProvider value={chatViewport}>
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+          {isMobilePanelLayout ? (
+            <>
+              <div
+                ref={mobilePagerRef}
+                className="mobile-chat-pager absolute inset-x-0 top-0 -bottom-4 flex overflow-x-auto overflow-y-hidden bg-bg-100 pb-4"
+                style={{
+                  scrollSnapType: 'x mandatory',
+                  overscrollBehaviorX: 'contain',
+                  scrollbarWidth: 'none',
+                  WebkitOverflowScrolling: 'touch',
+                  perspective: '1200px',
+                  perspectiveOrigin: '50% 50%',
+                }}
+                onScroll={handleMobilePagerScroll}
+                onTouchStart={handleMobilePagerInteractionStart}
+                onTouchEnd={handleMobilePagerInteractionEnd}
+                onTouchCancel={handleMobilePagerInteractionEnd}
+              >
+                <section
+                  className="h-full shrink-0 overflow-hidden bg-bg-100"
+                  aria-hidden={mobileActivePage !== 'left'}
+                  inert={mobileActivePage !== 'left'}
+                  style={{
+                    width: `${mobileLeftPanelWidth}px`,
+                    flexBasis: `${mobileLeftPanelWidth}px`,
+                    scrollSnapAlign: 'start',
+                    scrollSnapStop: 'always',
+                  }}
+                >
+                  <Sidebar
+                    isOpen={sidebarExpanded}
+                    selectedSessionId={paneLayout.focusedSessionId}
+                    onSelectSession={handleSelectSession}
+                    onNewSession={handleNewSession}
+                    onOpen={handleOpenSidebar}
+                    onClose={handleCloseSidebar}
+                    contextLimit={focusedController?.contextLimit}
+                    onOpenSettings={openSettings}
+                    mobileInline
+                  />
+                </section>
+
+                <section
+                  ref={surfaceRef}
+                  className="relative h-full shrink-0 overflow-visible bg-bg-100"
+                  style={{
+                    width: `${mobilePageWidth}px`,
+                    flexBasis: `${mobilePageWidth}px`,
+                    scrollSnapAlign: 'start',
+                    scrollSnapStop: 'always',
+                  }}
+                >
+                  <div
+                    className="absolute inset-y-0 -left-4 -right-4 z-10 flex flex-col overflow-hidden bg-bg-100 rounded-xl shadow-[0_0_24px_hsl(var(--always-black)/0.15)] [contain:layout_paint]"
+                    aria-hidden={mobileActivePage !== 'chat'}
+                    inert={mobileActivePage !== 'chat'}
+                    style={{
+                      transform: 'translate3d(var(--mobile-chat-offset-x, 0px), 0, 0) rotateY(var(--mobile-chat-rotate-y, 0deg)) scale(var(--mobile-chat-scale, 1))',
+                      transformOrigin: 'var(--mobile-chat-transform-origin, 50% 50%)',
+                      transformStyle: 'preserve-3d',
+                      backfaceVisibility: 'hidden',
+                      willChange: 'transform',
+                    }}
+                  >
+                    <div className={`flex-1 min-h-0 px-4 ${paneLayout.isSplit && !paneLayout.fullscreenPaneId ? 'py-2' : ''}`}>
+                      <SplitContainer
+                        node={paneLayout.root}
+                        renderLeaf={renderPaneLeaf}
+                        fullscreenPaneId={paneLayout.fullscreenPaneId}
+                      />
+                    </div>
+
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 z-[80] rounded-xl border-x border-border-200/50"
+                    />
+                  </div>
+
+                  {sidebarExpanded && (
+                    <button
+                      type="button"
+                      aria-label={t('chat:sidebar.collapseSidebar')}
+                      className="absolute inset-0 z-[70] cursor-default bg-transparent [touch-action:pan-x]"
+                      onClick={handleCloseSidebar}
+                    />
+                  )}
+                </section>
+
+                <section
+                  className="h-full shrink-0 overflow-hidden bg-bg-100"
+                  aria-hidden={mobileActivePage !== 'right'}
+                  inert={mobileActivePage !== 'right'}
+                  style={{
+                    width: `${mobilePageWidth}px`,
+                    flexBasis: `${mobilePageWidth}px`,
+                    scrollSnapAlign: 'start',
+                    scrollSnapStop: 'always',
+                  }}
+                >
+                  <RightPanel
+                    directory={focusedDirectory}
+                    sessionId={paneLayout.focusedSessionId}
+                    serverId={focusedServerId}
+                    inline
+                    renderPanelContent={rightPanelOpen || shouldRenderMobileRightPanel}
+                  />
+                </section>
+              </div>
+
+            </>
+          ) : (
+            <>
+              <Sidebar
+                isOpen={sidebarExpanded}
+                selectedSessionId={paneLayout.focusedSessionId}
+                onSelectSession={handleSelectSession}
+                onNewSession={handleNewSession}
+                onOpen={handleOpenSidebar}
+                onClose={handleCloseSidebar}
+                contextLimit={focusedController?.contextLimit}
+                onOpenSettings={openSettings}
+              />
+
+              <div className="flex-1 flex min-w-0 h-full overflow-hidden">
+                <div
+                  ref={surfaceRef}
+                  className="flex-1 flex flex-col min-w-0 overflow-hidden"
+                  style={{ minWidth: `${CHAT_SURFACE_MIN_WIDTH}px` }}
+                >
+                  <div className={paneLayout.isSplit && !paneLayout.fullscreenPaneId ? 'flex-1 min-h-0 p-2' : 'flex-1 min-h-0'}>
+                    <SplitContainer
+                      node={paneLayout.root}
+                      renderLeaf={renderPaneLeaf}
+                      fullscreenPaneId={paneLayout.fullscreenPaneId}
+                    />
+                  </div>
+
+                </div>
+
+                <RightPanel
+                  directory={focusedDirectory}
+                  sessionId={paneLayout.focusedSessionId}
+                  serverId={focusedServerId}
+                />
+              </div>
+            </>
+          )}
+          <ToastContainer />
+        </div>
+
+        <Suspense fallback={null}>
+          <SettingsDialog isOpen={settingsDialogOpen} onClose={closeSettings} initialTab={settingsInitialTab} />
+        </Suspense>
+      </ChatViewportProvider>
+    </div>
+  )
+}
+
+export default App

@@ -1,0 +1,28 @@
+# DSH Remote UI - 纯前端独立部署（同源反代，绕过浏览器跨源限制）
+# 静态文件本地托管；/api、/ws 反代到 DSH Remote Server（默认 https://dsh.r2049.cn）
+
+:3000 {
+	# REST 反代（保留 /api 前缀；DSH Server 的路由即 /api/v1/*）
+	handle /api/* {
+		reverse_proxy {$DSH_SERVER:host.dsh.internal:443} {
+			header_up Host {$DSH_SERVER_HOST:dsh.r2049.cn}
+			header_up Authorization {http.request.header.Authorization}
+		}
+	}
+
+	# 隧道控制 WSS（Noise IK 握手走 secure.handshake 控制帧；长连接不受 flush 影响）
+	handle /ws/* {
+		reverse_proxy {$DSH_SERVER:host.dsh.internal:443} {
+			header_up Host {$DSH_SERVER_HOST:dsh.r2049.cn}
+		}
+	}
+
+	# 前端静态文件
+	handle {
+		root * /srv
+		file_server
+		try_files {path} /index.html
+	}
+
+	encode gzip
+}

@@ -1,0 +1,18 @@
+{
+  "name": "DSH Remote",
+  "short_name": "DSH Remote",
+  "description": "DSH Remote UI - remote client for ds-harness-remote",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a1a1a",
+  "theme_color": "#262524",
+  "icons": [
+    {
+      "src": "dsh-remote.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

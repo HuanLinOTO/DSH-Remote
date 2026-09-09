@@ -1,0 +1,75 @@
+{
+  "login": {
+    "title": "DSH Remote",
+    "subtitle": "登录 DSH Remote Server 账号，连接你的 Harness 主机。",
+    "server": "服务器地址",
+    "serverHint": "通常是电脑端展示的 HTTPS 地址。",
+    "email": "邮箱",
+    "password": "密码",
+    "methodZhihu": "知乎",
+    "methodGithub": "GitHub",
+    "methodPassword": "邮箱",
+    "signInZhihu": "使用知乎账号登录",
+    "signInGithub": "使用 GitHub 账号登录",
+    "oauthHint": "会打开浏览器完成授权，然后自动返回这里。",
+    "qrTitle": "浏览器确认登录",
+    "qrHint": "若浏览器授权后没有自动返回，用这个方式：打开授权页确认登录，应用自动完成。",
+    "qrWaiting": "等待浏览器中确认授权…",
+    "qrOpenPage": "打开授权页面",
+    "qrCancel": "取消",
+    "qrExpired": "授权会话已过期。",
+    "qrRetry": "重新发起授权",
+    "signIn": "登录",
+    "signingIn": "登录中…",
+    "noAccount": "没有账号？",
+    "register": "到服务器注册"
+  },
+  "hosts": {
+    "title": "主机",
+    "empty": "该账号下还没有注册的主机。请在本机启动 Host 插件后刷新。",
+    "loading": "正在加载主机…",
+    "connect": "连接",
+    "connecting": "连接中…",
+    "connected": "已连接",
+    "refresh": "刷新",
+    "signOut": "退出登录",
+    "disconnect": "断开",
+    "fingerprint": "主机身份密钥指纹"
+  },
+  "status": {
+    "authenticating": "正在认证",
+    "transport": "正在建立传输",
+    "secure": "正在建立加密通道",
+    "loading": "正在加载会话",
+    "ready": "就绪",
+    "retry": "重试",
+    "connecting": "连接中",
+    "reconnecting": "重连中",
+    "offline": "离线",
+    "connected": "已连接"
+  },
+  "phase": {
+    "disconnected": "未连接",
+    "connecting": "连接中",
+    "connected": "已连接",
+    "reconnecting": "重连中",
+    "offline": "离线"
+  },
+  "workspace": {
+    "pick": "选择工作区…",
+    "empty": "暂无工作区"
+  },
+  "errors": {
+    "hostOffline": "主机不在线。",
+    "connectionFailed": "连接失败。",
+    "secureChannelFailed": "加密通道建立失败。",
+    "connectionReplaced": "连接已被另一个窗口接管。",
+    "identityNotReady": "设备身份尚未准备完成，请稍后重试。",
+    "zhihuUnsupported": "当前服务不支持知乎授权，请改用其他登录方式。",
+    "githubUnsupported": "当前服务不支持 GitHub 授权，请改用其他登录方式。",
+    "oauthCancelled": "未完成授权（{{code}}），请再试一次。",
+    "oauthInvalid": "登录信息已失效，请重新登录。",
+    "zhihuOauthFailed": "知乎授权失败：服务器换取登录令牌失败，请稍后重试或检查服务器 OAuth 配置。",
+    "githubOauthFailed": "GitHub 授权失败：服务器换取登录令牌失败，请检查服务器的 GitHub OAuth App 配置（client secret）后重试。"
+  }
+}

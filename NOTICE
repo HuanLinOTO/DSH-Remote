@@ -1,0 +1,52 @@
+DSH Remote — NOTICE / 署名
+==========================
+
+DSH Remote
+Copyright (C) 2026 HuanLin (https://github.com/HuanLinOTO)
+Licensed under the GNU General Public License v3.0 (GPL-3.0-only), see LICENSE.
+
+本程序是自由软件：你可以按自由软件基金会发布的 GNU 通用公共许可证第 3 版
+（或更新版本）条款重新发布和/或修改它。本程序分发时希望有用，但不提供任何担保。
+
+--------------------------------------------------------------------------------
+1. UI 层来源：OpenCodeUI
+--------------------------------------------------------------------------------
+
+本仓库的界面层（聊天渲染、多窗格布局、主题系统、终端、Tauri 桌面壳、移动端布局等）
+**修改自 OpenCodeUI**：
+
+    OpenCodeUI — https://github.com/lehhair/OpenCodeUI
+    Copyright (C) OpenCodeUI contributors
+    License: GPL-3.0
+
+本仓库是 OpenCodeUI 的衍生作品（derivative work），不是其官方 fork。
+原项目名称、版权声明与 GPL-3.0 许可证（见 LICENSE）均予保留。
+
+The UI layer of this repository is a derivative work of OpenCodeUI
+(https://github.com/lehhair/OpenCodeUI, GPL-3.0). Upstream copyright notices and the
+GPL-3.0 license text are preserved in LICENSE.
+
+--------------------------------------------------------------------------------
+2. 协议栈来源：ds-harness-remote
+--------------------------------------------------------------------------------
+
+`src/dsh/vendor/` 下的协议栈源码 vendor 自 ds-harness-remote：
+
+    ds-harness-remote — https://github.com/liguobao/ds-harness-remote
+    License: MIT
+
+具体来源 commit、文件映射与本地改动见 `src/dsh/VENDOR.md`。
+本仓库是 ds-harness-remote 的**第三方客户端**，不是其官方客户端。
+
+The protocol stack under `src/dsh/vendor/` is vendored from ds-harness-remote
+(https://github.com/liguobao/ds-harness-remote, MIT). See `src/dsh/VENDOR.md`.
+This repository is a third-party client of ds-harness-remote, not the official one.
+
+--------------------------------------------------------------------------------
+3. 其他第三方组件
+--------------------------------------------------------------------------------
+
+- `@opencode-ai/sdk` — 仅类型导入（type-only），构建期擦除。
+- `@deepseek-ai/dsh` / `@deepseek-ai/dsh web` — 被远程操作的 Host 运行时（官方 npm 包，不属于本仓库）。
+- `@tanstack/react-virtual`、`shiki`、`motion`、`react-markdown`、`xterm.js` 等依赖遵循各自许可证。
+- 本仓库保留的上游遗留物：`docker/`、`openapi*.json`（OpenCodeUI 遗留部署物与 API 参考文档）。

@@ -1,0 +1,75 @@
+{
+  "login": {
+    "title": "DSH Remote",
+    "subtitle": "Sign in to your DSH Remote Server account to reach your Harness hosts.",
+    "server": "Server address",
+    "serverHint": "Usually the HTTPS address shown on your computer.",
+    "email": "Email",
+    "password": "Password",
+    "methodZhihu": "Zhihu",
+    "methodGithub": "GitHub",
+    "methodPassword": "Email",
+    "signInZhihu": "Continue with Zhihu",
+    "signInGithub": "Continue with GitHub",
+    "oauthHint": "A browser window opens to finish authorization, then returns here.",
+    "qrTitle": "Confirm in browser",
+    "qrHint": "If the browser does not return to the app automatically, use this: open the authorization page, confirm, and the app completes sign-in.",
+    "qrWaiting": "Waiting for confirmation in the browser…",
+    "qrOpenPage": "Open authorization page",
+    "qrCancel": "Cancel",
+    "qrExpired": "The authorization session expired.",
+    "qrRetry": "Restart authorization",
+    "signIn": "Sign in",
+    "signingIn": "Signing in…",
+    "noAccount": "No account?",
+    "register": "Register on the server"
+  },
+  "hosts": {
+    "title": "Hosts",
+    "empty": "No hosts are registered under this account. Start the Host plugin on your machine, then refresh.",
+    "loading": "Loading hosts…",
+    "connect": "Connect",
+    "connecting": "Connecting…",
+    "connected": "Connected",
+    "refresh": "Refresh",
+    "signOut": "Sign out",
+    "disconnect": "Disconnect",
+    "fingerprint": "Host identity key fingerprint"
+  },
+  "status": {
+    "authenticating": "Authenticating",
+    "transport": "Connecting transport",
+    "secure": "Securing channel",
+    "loading": "Loading sessions",
+    "ready": "Ready",
+    "retry": "Retry",
+    "connecting": "Connecting",
+    "reconnecting": "Reconnecting",
+    "offline": "Offline",
+    "connected": "Connected"
+  },
+  "phase": {
+    "disconnected": "Disconnected",
+    "connecting": "Connecting",
+    "connected": "Connected",
+    "reconnecting": "Reconnecting",
+    "offline": "Offline"
+  },
+  "workspace": {
+    "pick": "Pick workspace…",
+    "empty": "No workspaces"
+  },
+  "errors": {
+    "hostOffline": "The Host is offline.",
+    "connectionFailed": "Connection failed.",
+    "secureChannelFailed": "Secure channel failed.",
+    "connectionReplaced": "This connection was taken over by another window.",
+    "identityNotReady": "The device identity is not ready yet. Try again shortly.",
+    "zhihuUnsupported": "This server does not support Zhihu authorization. Use another sign-in method.",
+    "githubUnsupported": "This server does not support GitHub authorization. Use another sign-in method.",
+    "oauthCancelled": "Authorization was not completed ({{code}}). Please try again.",
+    "oauthInvalid": "The sign-in information has expired. Sign in again.",
+    "zhihuOauthFailed": "Zhihu authorization failed: the server could not exchange the login token. Retry shortly or check the server's OAuth configuration.",
+    "githubOauthFailed": "GitHub authorization failed: the server could not exchange the login token. Check the server's GitHub OAuth App configuration (client secret) and retry."
+  }
+}
