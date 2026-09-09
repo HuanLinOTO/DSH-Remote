@@ -83,10 +83,14 @@ jobs:
 
       - run: npm ci
 
-      # tauri-action runs beforeBuildCommand (npm run build) + cargo build
+      # tauri-action runs beforeBuildCommand (npm run build) + cargo build.
+      # tauriScript is pinned to npm: the repo also carries a pnpm-lock.yaml,
+      # which would otherwise make the action shell out to a pnpm that CI
+      # never installed (we install with `npm ci`).
       - name: Build desktop app
         uses: tauri-apps/tauri-action@v0
         with:
+          tauriScript: npm run tauri
           args: ${{ matrix.args }}
 
       - name: Prepare artifacts
