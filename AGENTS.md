@@ -152,6 +152,29 @@ npm run lint                  # eslint（存量 warning 在未触碰文件，忽
   控制通道收发逐帧记录在案，排查断连先看这里。
 - 出网走 mihomo 代理（127.0.0.1:7890）；git clone GitHub 需 `-c http.proxy=http://127.0.0.1:7890`。
 
+## CI / 发布
+
+- `.github/workflows/build.yml`（CI）：push / PR 跑 `web`（`npm ci` + `npm run validate`）与 `rust`（`cargo test`）。
+- `.github/workflows/release.yml`（Release）：**只由 `v*` tag push 触发**，没有 workflow_dispatch
+  （否则 `github.ref_name` 是 main）。顺序 preflight（探测签名密钥）→ build-desktop（4 平台）
+  → build-android（arm64 / armv7，签名）→ publish-release；publish 的 `needs` 含 build-android，
+  android 失败就整体不发布，避免发出残缺 release。
+- CI 用 npm：`package-lock.json` 是唯一事实来源（本地用 pnpm，仓库里同时存在 pnpm-lock.yaml），
+  所以 tauri-action 必须显式 `tauriScript: npm run tauri`，否则它会去找 CI 没装的 pnpm。
+- Android 签名 Secrets：`KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`；
+  工作流写 `src-tauri/gen/android/keystore.properties`，键名必须是
+  storeFile / storePassword / keyAlias / keyPassword（上游模板写成 password 是错的）。
+- **Gradle 发行版由 curl 预取，不要改回让 wrapper 自己下载**：2026-09-09 两个 android job 全部失败于
+  `java.net.ConnectException: Connection refused`。真凶是提交进仓库的
+  `src-tauri/gen/android/gradle.properties` 里带着作者本机代理 `systemProp.*`（127.0.0.1:7890）：
+  gradle-wrapper.jar 的 `SystemPropertiesHandler` 会把 `systemProp.*` 应用到 wrapper JVM，
+  Gradle daemon 也读同一个文件 —— runner 上没有这个代理，于是所有 Gradle 网络请求（wrapper 下载发行版、
+  插件解析）一律被拒。**本机代理只放 `~/.gradle/gradle.properties`，仓库里的 gradle.properties 不得出现 systemProp.***。
+  为免再次踩坑，`Provision Gradle distribution` 仍用 curl 多镜像（官方 / downloads.gradle.org / 腾讯 / NJU）
+  + 重试 + sha256 校验把发行版预取到 `~/.gradle-dist/`，把 `distributionUrl` 指向 `file://…` 并写入
+  `distributionSha256Sum`，同时 `GRADLE_OPTS=-Djava.net.preferIPv4Stack=true`（runner 无 IPv6）。
+  `src-tauri/gen/android/gradlew` 在 git 中必须是 100755，步骤内也会 `chmod +x`。
+
 ## Agent 环境备注
 
 - `edit` 工具的 old_string 含中文时可能匹配失败：改含中文的代码用 ASCII 锚点，或用 pwsh/run_node 行级重建（注意保持 CRLF）。

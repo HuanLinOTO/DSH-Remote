@@ -70,6 +70,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if grep -n '^systemProp\.' src-tauri/gen/android/gradle.properties; then
+            echo "::error::src-tauri/gen/android/gradle.properties must not contain machine-local systemProp.* entries"
+            exit 1
+          fi
           VERSION="8.14.3"
           SHA256="bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531"
           DIST_NAME="gradle-${VERSION}-bin"
