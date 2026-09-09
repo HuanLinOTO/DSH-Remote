@@ -125,6 +125,12 @@ REST 侧 `AUTH_INVALID`/`DEVICE_REVOKED`/401 → `AccountRequiredError` → 清�
    顶部 ConnectionStatusBar 展示状态（不要在断线时把用户踢回设备选择页）。
 7. **WS 协议层 Ping/Pong**（RFC 6455）由 tokio-tungstenite 自动处理，与应用层 JSON ping/pong 是两回事。
 8. 单实例锁：第二个实例直接退出；杀应用进程会级联杀掉它拉起的 vite dev server。
+9. **历史翻页游标按会话隔离**：唯一来源是 `sessionStore.historyCursors[sessionId]`
+   （oldestSeq / hasMore / loadingOlder）；`loadOlderHistory(sessionId)` 与
+   `useSessionManager.loadMoreHistory`（取当前窗格路由会话）都只碰自己会话的游标。
+   不要再引入全局 oldestLoadedSeq/historyHasMore —— 多窗格下会被别的会话冲掉，
+   表现为长会话只剩一个没有 user 锚点的折叠壳
+   （见 docs/plans/2026-09-09-history-paging-per-session-fix.md）。
 
 ## 开发与验证
 
