@@ -310,7 +310,14 @@ jobs:
       - name: Extract changelog
         run: |
           TAG="${{ github.ref_name }}"
-          BODY=$(sed -n "/^## \[${TAG}\]/,/^## \[/{ /^## \[${TAG}\]/d; /^## \[/d; p; }" CHANGELOG.md)
+          # Take only the FIRST matching section: this repo also carries the
+          # upstream OpenCodeUI history, which reuses v0.1.x numbers (v0.1.6 and
+          # v0.1.7 already collide), so a sed range would append a stray bullet.
+          BODY=$(awk -v tag="${TAG}" '
+            !found && index($0, "## [" tag "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md)
           BODY=$(echo "$BODY" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba;}')
           if [ -z "$BODY" ]; then
             BODY="No changelog entry found for ${TAG}."
@@ -320,7 +327,7 @@ jobs:
             echo
             echo '---'
             echo
-            echo '**Desktop:** Windows (.exe), macOS (.dmg), Linux (.deb, .AppImage)'
+            echo '**Desktop:** Windows (.exe), macOS (.dmg), Linux (.deb)'
             echo
             echo '**Android:** Android (.apk) — arm64, armeabi-v7a'
             echo
