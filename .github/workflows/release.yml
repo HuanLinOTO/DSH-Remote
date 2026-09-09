@@ -179,6 +179,7 @@ jobs:
       - run: npm ci
 
       # gen/android/app/build.gradle.kts reads storeFile/storePassword/keyAlias/keyPassword
+      # (secret values are stripped of any trailing CR/LF so they cannot corrupt the password)
       - name: Setup Android signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -186,12 +187,15 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          base64 -d <<< "$KEYSTORE_BASE64" > "$RUNNER_TEMP/keystore.jks"
+          KS_PW=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '\r\n')
+          KS_ALIAS=$(printf '%s' "$KEY_ALIAS" | tr -d '\r\n')
+          KS_KEY_PW=$(printf '%s' "$KEY_PASSWORD" | tr -d '\r\n')
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/keystore.jks"
           cat > src-tauri/gen/android/keystore.properties <<EOF
           storeFile=$RUNNER_TEMP/keystore.jks
-          storePassword=$KEYSTORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
+          storePassword=$KS_PW
+          keyAlias=$KS_ALIAS
+          keyPassword=$KS_KEY_PW
           EOF
 
       - name: Build and verify APK
