@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-ui",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "DSH Remote - a third-party desktop/Android client for ds-harness-remote (UI derived from OpenCodeUI)",
   "license": "GPL-3.0-only",
   "author": "HuanLin (https://github.com/HuanLinOTO)",

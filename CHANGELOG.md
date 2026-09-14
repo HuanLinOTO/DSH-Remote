@@ -3,6 +3,17 @@
 本项目（DSH Remote）自 v0.1.6 起独立维护；下方的 `v0.6.x` 及更早条目来自上游
 [OpenCodeUI](https://github.com/lehhair/OpenCodeUI)，仅作历史保留。
 
+## [v0.2.0] - 2026-09-14
+
+上游协议栈同步（ds-harness-remote `4f77a4f`），协议 schema 对齐 v3。
+
+### 新增与变更
+
+- feat(dsh): vendored protocol / client-core 同步至上游 `4f77a4f`：`harness.remote.v3` 会话格式（capabilities 协商 `sessionFormat`，`session/follow` 的 assistant-stream 帧按 attemptId + index 校验还原为 `assistant/chunk` 事件）、§23 错误码、§24 默认帧上限、Account Authorization schema；投影值在合并缓存与 `applyProjection` 前统一 normalize，legacy agent preset `code` 映射为 `ptc`；默认 host 版本回退更新为 `v0.1.2-rc.1`
+- feat(dsh): `surfaceOp.replace` 扩展区间寻址——字符区间（`start/end`）与事件 seq 区间（`startSeq/endSeq`）
+- chore(deps): pnpm-lock 的 Tauri 插件 specifier 对齐到实际固定版本（2.7.3 / 2.5.2 / 2.6.0 / 2.4.0 / 2.5.5）
+- test(vendor): 新增 account-authorization / error-codes 套件，conformance fixtures 与 rtc-chunking 用例对齐上游（74 文件 / 743 通过 + 3 expected fail）
+
 ## [v0.1.6] - 2026-09-09
 
 首个公开发布：OpenCodeUI 界面 + DSH Remote 协议栈，面向远程 Host 与移动端。
