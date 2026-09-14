@@ -113,7 +113,11 @@ export class DshRemoteConnection {
       if (features.remoteGateway) {
         const alpha = new HarnessAlphaClient(
           core,
-          { clientVersion: host.clientVersion, harnessVersion: host.harnessVersion },
+          {
+            clientVersion: host.clientVersion,
+            harnessVersion: host.harnessVersion,
+            ...(features.sessionFormat === undefined ? {} : { sessionFormat: features.sessionFormat }),
+          },
           frame => this.muxHandler?.(frame as unknown as MuxStreamFrame),
         )
         alpha.start()

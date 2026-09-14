@@ -4,6 +4,7 @@ import type { RemoteClientCore } from './index'
 export interface HarnessAlphaHostInfo {
   clientVersion?: string
   harnessVersion?: string
+  sessionFormat?: 3
 }
 
 export interface HarnessClientFrame {
@@ -107,9 +108,14 @@ export interface HarnessSessionEvent {
   time: number
   data: Record<string, unknown>
   sourceEventSeqs?: number[]
-  surfaceOp?: 'append' | 'replace'
+  surfaceOp?: HarnessSurfaceOp
   ignorable?: true
 }
+
+export type HarnessSurfaceOp =
+  | 'append'
+  | { op: 'replace'; start: number; end: number }
+  | { op: 'replace'; startSeq: number; endSeq: number }
 
 export interface HarnessHistoryEntry {
   event: HarnessSessionEvent
@@ -135,6 +141,22 @@ type StreamHandle = {
   iterator?: AsyncIterator<unknown>
 }
 
+interface AssistantStreamState {
+  attemptId: string
+  startedAfterSeq: number
+  turn: number
+  step: number
+  nextIndex: number
+}
+
+type SessionFollowHandle = StreamHandle & {
+  sessionId: string
+  assistant?: AssistantStreamState
+}
+
+const LEGACY_AGENT_PRESET = 'code'
+const LEGACY_AGENT_PRESET_TARGET = 'ptc'
+
 export class HarnessAlphaClient {
   readonly mode = 'remote' as const
 
@@ -145,7 +167,7 @@ export class HarnessAlphaClient {
   private readonly pendingEvents = new Map<string, PendingRemoteEvent>()
   private events?: StreamHandle
   private control?: StreamHandle
-  private sessionFollow?: StreamHandle & { sessionId: string }
+  private sessionFollow?: SessionFollowHandle
   private eventClientId?: string
   private eventHostHome?: string
 
@@ -284,13 +306,14 @@ export class HarnessAlphaClient {
     }
 
     await this.closeSessionFollow()
-    const handle: StreamHandle & { sessionId: string } = { sessionId, controller: new AbortController() }
+    const handle: SessionFollowHandle = { sessionId, controller: new AbortController() }
     this.sessionFollow = handle
     const source = await this.gateway.open('session/follow', {
       args: {
         request: {
           address: { kind: 'session', sessionId },
           maxMessages,
+          ...(this.host.sessionFormat === 3 ? { assistantStream: true as const } : {}),
         },
       },
     }, handle.controller.signal)
@@ -305,6 +328,7 @@ export class HarnessAlphaClient {
     const snapshot = first.value
     const cursor = typeof snapshot.cursor === 'number' ? snapshot.cursor : undefined
     if (cursor !== undefined) this.followCursors.set(sessionId, cursor)
+    if (this.host.sessionFormat === 3) handle.assistant = assistantStreamBaseline(snapshot.assistantStream)
     this.applyProjectionBaseline(sessionId, snapshot.projections)
     void this.pumpSessionFollow(handle, iterator).catch(error => this.emitStreamFailure(handle, this.sessionFollow, error))
     return {
@@ -344,7 +368,7 @@ export class HarnessAlphaClient {
     if (this.sessionsCache.size === 0) await this.sessionList().catch(() => [])
     const canOpenPath = await this.callValue<boolean>('session/canOpenWorkspacePath', {}).catch(() => false)
     return {
-      version: this.host.harnessVersion ?? this.host.clientVersion ?? 'v0.1.2-alpha.2',
+      version: this.host.harnessVersion ?? this.host.clientVersion ?? 'v0.1.2-rc.1',
       cwd: this.eventHostHome ?? '',
       attachedSessions: this.sessionsCache.size,
       canOpenPath,
@@ -479,13 +503,13 @@ export class HarnessAlphaClient {
   }
 
   private async pumpSessionFollow(
-    handle: StreamHandle & { sessionId: string },
+    handle: SessionFollowHandle,
     iterator: AsyncIterator<unknown>,
   ): Promise<void> {
     while (this.sessionFollow === handle) {
       const next = await iterator.next()
       if (next.done) return
-      for (const entry of entriesFromFollowValue(next.value)) {
+      for (const entry of this.entriesFromSessionFollow(handle, next.value)) {
         this.emitFrame({
           rpcId: '',
           payload: {
@@ -497,6 +521,37 @@ export class HarnessAlphaClient {
         })
       }
     }
+  }
+
+  private entriesFromSessionFollow(handle: SessionFollowHandle, value: unknown): HarnessHistoryEntry[] {
+    if (this.host.sessionFormat !== 3 || !isRecord(value) || value.type !== 'assistant-stream') {
+      return entriesFromFollowValue(value)
+    }
+    const frame = isRecord(value.frame) ? value.frame : undefined
+    if (frame === undefined || typeof frame.type !== 'string') return []
+    if (frame.type === 'start') {
+      handle.assistant = assistantStreamAttempt(frame, 0)
+      return []
+    }
+    const attempt = handle.assistant
+    if (frame.type === 'end') {
+      if (attempt !== undefined && frame.attemptId === attempt.attemptId) handle.assistant = undefined
+      return []
+    }
+    if (frame.type !== 'chunk' || attempt === undefined
+      || frame.attemptId !== attempt.attemptId
+      || frame.index !== attempt.nextIndex
+      || typeof frame.time !== 'number'
+      || !isRecord(frame.chunk)) return []
+    attempt.nextIndex += 1
+    return [{
+      event: {
+        type: 'assistant/chunk',
+        seq: attempt.startedAfterSeq + 1 - 1 / (attempt.nextIndex + 1),
+        time: frame.time,
+        data: { turn: attempt.turn, step: attempt.step, chunk: frame.chunk },
+      },
+    }]
   }
 
   private routeEventFrame(value: unknown): void {
@@ -574,42 +629,44 @@ export class HarnessAlphaClient {
   private applyProjectionBaseline(sessionId: string, block: unknown): void {
     if (!isRecord(block) || !isRecord(block.values)) return
     const seq = typeof block.asOfSeq === 'number' ? block.asOfSeq : undefined
+    const values = normalizeProjectionValues(block.values)
     const cached = this.sessionsCache.get(sessionId)
     if (cached !== undefined) {
       this.sessionsCache.set(sessionId, {
         ...cached,
-        projections: { asOfSeq: seq, values: { ...cached.projections?.values, ...block.values } },
+        projections: { asOfSeq: seq, values: { ...cached.projections?.values, ...values } },
       })
     }
-    for (const [key, value] of Object.entries(block.values)) this.applyProjection(sessionId, key, value, seq)
+    for (const [key, value] of Object.entries(values)) this.applyProjection(sessionId, key, value, seq)
   }
 
   private applyProjection(sessionId: string, key: string, value: unknown, seq?: number): void {
+    const projectedValue = normalizeProjectionValue(key, value)
     const cached = this.sessionsCache.get(sessionId)
     if (cached !== undefined) {
       this.sessionsCache.set(sessionId, {
         ...cached,
         projections: {
           asOfSeq: seq ?? cached.projections?.asOfSeq,
-          values: { ...cached.projections?.values, [key]: value },
+          values: { ...cached.projections?.values, [key]: projectedValue },
         },
       })
     }
     if (key === 'modelSelection') {
-      const selection = modelSelectionFromValue(value)
+      const selection = modelSelectionFromValue(projectedValue)
       if (selection !== undefined) this.selectedModels.set(sessionId, selection)
     }
     // projection 遥测不进 chat reducer：UI 目前只经 sessionModels/缓存消费它，
     // 逐帧 emit 会让每条 projection 都触发一次全量 store 订阅管线。
     // 例外：title 由 Host LLM 在首轮对话后生成，显式转发让 UI 即时更名，
-    // 不必等下一次 session.list 拉取（标题变更频率极低，不会造成投影风暴）。
+    // 不必等下一次 session/list 拉取（标题变更频率极低，不会造成投影风暴）。
     if (key === 'title') {
       this.emitFrame({
         rpcId: '',
         payload: {
           type: 'session/renamed',
           sessionId,
-          ...(typeof value === 'string' ? { title: value } : {}),
+          ...(typeof projectedValue === 'string' ? { title: projectedValue } : {}),
         },
       })
     }
@@ -648,7 +705,36 @@ function normalizeSession(value: unknown): HarnessRemoteSession | undefined {
     || typeof value.updatedAt !== 'number'
     || typeof value.running !== 'boolean'
     || typeof value.blank !== 'boolean') return undefined
-  return { ...(value as unknown as HarnessRemoteSession), ...liftSessionProjectionFields(value) }
+  const session = value as unknown as HarnessRemoteSession
+  return {
+    ...session,
+    ...(session.agentPreset === undefined ? {} : { agentPreset: normalizeAgentPreset(session.agentPreset) as string }),
+    ...(session.projections === undefined
+      ? {}
+      : {
+          projections: {
+            ...session.projections,
+            ...(isRecord(session.projections.values)
+              ? { values: normalizeProjectionValues(session.projections.values) }
+              : {}),
+          },
+        }),
+    ...liftSessionProjectionFields(value),
+  }
+}
+
+function normalizeProjectionValues(values: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [key, normalizeProjectionValue(key, value)]),
+  )
+}
+
+function normalizeProjectionValue(key: string, value: unknown): unknown {
+  return key === 'agentPreset' ? normalizeAgentPreset(value) : value
+}
+
+function normalizeAgentPreset(value: unknown): unknown {
+  return value === LEGACY_AGENT_PRESET ? LEGACY_AGENT_PRESET_TARGET : value
 }
 
 /**
@@ -696,6 +782,7 @@ function entriesFromFollowValue(value: unknown): HarnessHistoryEntry[] {
 
 function historyEntryFromEvent(event: Record<string, unknown>): HarnessHistoryEntry[] {
   if (typeof event.type !== 'string' || typeof event.seq !== 'number' || typeof event.time !== 'number') return []
+  const surfaceOp = normalizeSurfaceOp(event.surfaceOp)
   return [{
     event: {
       type: event.type,
@@ -703,10 +790,44 @@ function historyEntryFromEvent(event: Record<string, unknown>): HarnessHistoryEn
       time: event.time,
       data: isRecord(event.data) ? event.data : {},
       ...(Array.isArray(event.sourceEventSeqs) ? { sourceEventSeqs: event.sourceEventSeqs.filter((item): item is number => typeof item === 'number') } : {}),
-      ...(event.surfaceOp === 'append' || event.surfaceOp === 'replace' ? { surfaceOp: event.surfaceOp } : {}),
+      ...(surfaceOp === undefined ? {} : { surfaceOp }),
       ...(event.ignorable === true ? { ignorable: true } : {}),
     },
   }]
+}
+
+function normalizeSurfaceOp(value: unknown): HarnessSurfaceOp | undefined {
+  if (value === 'append') return value
+  if (!isRecord(value) || value.op !== 'replace') return undefined
+  if (typeof value.startSeq === 'number' && typeof value.endSeq === 'number') {
+    return { op: 'replace', startSeq: value.startSeq, endSeq: value.endSeq }
+  }
+  if (typeof value.start === 'number' && typeof value.end === 'number') {
+    return { op: 'replace', start: value.start, end: value.end }
+  }
+  return undefined
+}
+
+function assistantStreamBaseline(value: unknown): AssistantStreamState | undefined {
+  if (!isRecord(value) || !isRecord(value.activeAttempt)) return undefined
+  return assistantStreamAttempt(value.activeAttempt)
+}
+
+function assistantStreamAttempt(value: Record<string, unknown>, defaultNextIndex?: number): AssistantStreamState | undefined {
+  const nextIndex = typeof value.nextIndex === 'number' ? value.nextIndex : defaultNextIndex
+  return typeof value.attemptId === 'string'
+    && typeof value.startedAfterSeq === 'number'
+    && typeof value.turn === 'number'
+    && typeof value.step === 'number'
+    && nextIndex !== undefined
+    ? {
+        attemptId: value.attemptId,
+        startedAfterSeq: value.startedAfterSeq,
+        turn: value.turn,
+        step: value.step,
+        nextIndex,
+      }
+    : undefined
 }
 
 function entriesFromChunkRun(event: Record<string, unknown>): HarnessHistoryEntry[] {

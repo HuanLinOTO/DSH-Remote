@@ -291,13 +291,18 @@ export interface AskUserQuestionAnswer {
 }
 
 /** Structural mirror of @deepseek-ai/dsh-session SessionEvent (wire subset used by chat). */
+export type NativeSurfaceOp =
+  | 'append'
+  | { op: 'replace'; start: number; end: number }
+  | { op: 'replace'; startSeq: number; endSeq: number }
+
 export interface NativeSessionEvent {
   type: string
   seq: number
   time: number
   data: Record<string, unknown>
   sourceEventSeqs?: number[]
-  surfaceOp?: 'append' | 'replace'
+  surfaceOp?: NativeSurfaceOp
   ignorable?: true
 }
 

@@ -39,6 +39,14 @@ describe('protocol envelope', () => {
     expect(remoteEvents).toContain('harness.api.stream.closed')
   })
 
+  it('keeps Codex as an explicit Remote domain instead of a Harness session method', () => {
+    expect(rpcMethods).toContain('codex.app.call')
+    expect(rpcMethods).toContain('codex.app.transfer.commit')
+    expect(remoteEvents).toContain('codex.app.frame')
+    expect(remoteEvents).toContain('codex.app.stream.closed')
+    expect(rpcMethods).not.toContain('harness.api.codex')
+  })
+
   it('rejects unsupported protocol versions', () => {
     expect(() => parseRemoteMessage({ v: 2, id: 'x', type: 'rpc.request', timestamp: Date.now(), payload: {} })).toThrow()
   })
@@ -76,8 +84,8 @@ describe('protocol envelope', () => {
   })
 
   it('carries event metadata and retryable RPC errors', () => {
-    expect(createEvent('agent.status', { status: 'idle' }, { seq: 7, sessionId: 's1' })).toMatchObject({
-      payload: { seq: 7, sessionId: 's1', event: 'agent.status' },
+    expect(createEvent('harness.api.frame', { streamId: 's1', frame: {} }, { seq: 7, sessionId: 's1' })).toMatchObject({
+      payload: { seq: 7, sessionId: 's1', event: 'harness.api.frame' },
     })
     expect(createRpcError('r1', 'RATE_LIMITED', 'Busy', undefined, true)).toMatchObject({
       payload: { requestId: 'r1', retryable: true },
