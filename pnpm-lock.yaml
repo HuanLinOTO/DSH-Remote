@@ -42,19 +42,19 @@ importers:
         specifier: ^2.4.10
         version: 2.4.10
       '@tauri-apps/plugin-dialog':
-        specifier: ^2.6.0
+        specifier: ^2.7.3
         version: 2.7.3
       '@tauri-apps/plugin-fs':
-        specifier: ^2.4.5
+        specifier: ^2.5.2
         version: 2.5.2
       '@tauri-apps/plugin-http':
-        specifier: ^2.5.7
+        specifier: ^2.6.0
         version: 2.6.0
       '@tauri-apps/plugin-notification':
-        specifier: ^2.3.3
+        specifier: ^2.4.0
         version: 2.4.0
       '@tauri-apps/plugin-opener':
-        specifier: ^2.5.3
+        specifier: ^2.5.5
         version: 2.5.5
       ajv:
         specifier: ^8.20.0
